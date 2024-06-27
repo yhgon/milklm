@@ -1,9 +1,11 @@
 # exp 01 model card
 
-this is experiment 01 
+this is experiment 01 for small dataset
 - it use 20366MiB with 50 batch
 - 32L x [ ( 1024 dim, 16 heads, no GQA, non-trainable projection 1/10 proj)  + 0.5 scale ffn ] : 372MParam ~ mimic 3B param model
-- dataset : 2024 fineweb-edu only 4.4GB, 50batch x 64Tokens clm
+- dataset : 2024 fineweb-edu only 4.4GB(2EA 2.2GB) ,  1_577_715_712 tokens   1.5GTokens 
+
+-  50batch x 64Tokens clm
 - 
 ```
 ModelConfig(embedding_size=1024, num_layers=32, num_heads=16, ffn_scale_ratio=0.5, max_context_length=8192, vocab_size=200019, debug=False, proj_ratio_min=2, proj_ratio=10, num_keep_boundary_chunk=2)
