@@ -1,5 +1,4 @@
-
-%%file revdiffgpt_split_v2.py 
+%%file revdiffgpt_split_v2_backup.py 
 
 import math
 import torch
@@ -71,17 +70,10 @@ class CausalSelfAttention(nn.Module):
         self.lambda_q2 = nn.Parameter(torch.zeros(self.head_dim).normal_(mean=0, std=0.1))
         self.lambda_k2 = nn.Parameter(torch.zeros(self.head_dim).normal_(mean=0, std=0.1))
         
-        # LayerNorm inside the attention mechanism
-        #self.ln_attn = nn.LayerNorm(self.n_embd )
-
         # GroupNorm for normalizing across heads (1 group per head)
         self.gn_attn = nn.GroupNorm(1, self.head_dim, affine=False)  # GroupNorm with n_head groups
-
-    
         
     def forward(self, x, attn_mask=None):
-        # Apply half-size LayerNorm inside attention
-        #x = self.ln_attn(x)  # Apply half-size LayerNorm
         
         #print(f"CausalSelfAttention forward pass. Input shape: {x.shape}")
         B, T, C = x.size()
@@ -108,7 +100,6 @@ class CausalSelfAttention(nn.Module):
         q1 = q1 * self.scaling
         q2 = q2 * self.scaling
         
-
         # Compute attention scores
         attn_scores_1 = torch.matmul(q1, k1.transpose(-1, -2))  # [B, n_head, T, T]
         attn_scores_2 = torch.matmul(q2, k2.transpose(-1, -2))  # [B, n_head, T, T]
@@ -119,8 +110,8 @@ class CausalSelfAttention(nn.Module):
             attn_scores_1 = attn_scores_1.masked_fill(causal_mask, float('-inf'))  # Mask for Q1K1
             attn_scores_2 = attn_scores_2.masked_fill(causal_mask, float('-inf'))  # Mask for Q2K2
         else:
-            attn_scores_1 += attn_mask
-            attn_scores_2 += attn_mask            
+            attn_scores_1 = attn_scores_1.masked_fill(attn_mask, float('-inf'))
+            attn_scores_2 = attn_scores_2.masked_fill(attn_mask, float('-inf'))       
 
         # Softmax for both sets of scores
         attn_weights_1 = F.softmax(attn_scores_1, dim=-1)  # [B, n_head, T, T]
@@ -229,17 +220,12 @@ class ReversibleGPT(nn.Module):
 
         # Token embedding
         x = self.wte(input_ids)
-        
-
-        # Apply LayerNorm before entering the reversible blocks
-
          
         # Split input embedding into x1 and x2
         x1, x2 = torch.chunk(x, 2, dim=-1)
 
         # Pass through reversible layers
-        for layer in self.layers:
-          
+        for layer in self.layers:          
             x1, x2 = layer(x1, x2, attn_mask=attn_mask)
         
         # Concatenate the two halves
@@ -387,9 +373,9 @@ def calculate_pnorm_gnorm(model):
 
 def train(config):
 
-
+    
     # Add this before the training loop to create the log file with a timestamp
-    log_filename = f"log_split_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    log_filename = f"log_{config.n_embd:05d}d_{config.n_layer:02d}L_{config.n_head:03d}h_{config.ctx_len:04d}ctx_{config.batch_size:03d}bs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
     print(f"Starting training with config: {vars(config)}")
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")
@@ -406,9 +392,11 @@ def train(config):
     model = ReversibleGPT(config).to(device)
     print(model)
 
+ 
 
     T = config.ctx_len  # assuming ctx_len is the sequence length
     causal_mask = generate_causal_mask(T, config.device)
+    print(f" Causal Mask\n {causal_mask}")
     
     print("initialize parameters") 
     # Apply weight initialization
@@ -464,9 +452,11 @@ def train(config):
             # Decode input, ground truth, and prediction
             input_text = tokenizer.decode(inputs[0].tolist()).replace("\n"," ").replace("\r", " ")
             # Get predicted tokens for both paths
-            pred_ids = torch.argmax(logits[0], dim=-1)            
-            pred_text = tokenizer.decode(pred_ids.tolist()).replace("\n"," ").replace("\r", " ")      
-
+            pred_ids = torch.argmax(logits[0], dim=-1)     
+            try:
+                pred_text = tokenizer.decode(pred_ids.tolist()).replace("\n", " ").replace("\r", " ")
+            except Exception as e:
+                pred_text = f"[Decoding Error: {str(e)} ]"
             
             # Backward pass
             backward_start = time.perf_counter()
@@ -555,10 +545,11 @@ def train(config):
                     log_file.write(debug_info_save + '\n')  # Append each debug_info with a newline
                     
             
-            if idx % config.checkpoint_interval == 0 and idx == 0:
-                checkpoint_path = os.path.join(config.checkpoint_path, f'checkpoint_{iteration}.pt')
+            if idx % config.checkpoint_interval == 0 and idx > 0:
+                checkpoint_path = os.path.join(config.checkpoint_path, f'checkpoint_{config.n_embd}d_{config.n_layer}L_{config.n_head}h_{config.ctx_len}ctx_{config.batch_size}bs_{idx:08d}.pt')
                 print(f"Saving checkpoint to {checkpoint_path}")
                 torch.save({
+                    'config': config,
                     'iteration': iteration,
                     'idx': idx,
                     'model_state_dict': model.state_dict(),
@@ -582,29 +573,25 @@ class Config:
         self.checkpoint_path = "./checkpoints/"
         self.device = "cuda:0"
         self.tokenizer_name = "gpt-4o"
-        self.ctx_len = 1024
+        self.ctx_len = 256
         self.n_layer = 4
         self.n_embd = 512
-        self.n_head = 4
+        self.n_head = 8
         self.use_amp = True
-        self.batch_size = 6
-        self.lr = 1e-3
-        self.num_iterations = 10
+        self.batch_size = 24
+        self.lr = 1e-4
+        self.num_iterations = 1
         self.checkpoint_interval = 10000
         self.log_interval = 1
         self.grad_clip = 1
         self.debug_level = 1  # Add this line
         
-
 # Main execution
 if __name__ == "__main__":
     print("Starting main execution")
     
     config = Config()
 
-    # You can modify config parameters here if needed
-    # config.num_iterations = 200
-    # config.batch_size = 4
     
     train(config)
     print("Main execution completed")
